@@ -28,6 +28,11 @@ impl Command for Print {
                 "print without formatting (including binary data)",
                 Some('r'),
             )
+            .switch(
+                "debug",
+                "print Rust object debug",
+                Some('d'),
+            )
             .category(Category::Strings)
     }
 
@@ -57,11 +62,18 @@ Since this command has no output, there is no point in piping it with other comm
         let no_newline = call.has_flag(engine_state, stack, "no-newline")?;
         let to_stderr = call.has_flag(engine_state, stack, "stderr")?;
         let raw = call.has_flag(engine_state, stack, "raw")?;
+        let debug = call.has_flag(engine_state, stack, "debug")?;
 
         // This will allow for easy printing of pipelines as well
         if !args.is_empty() {
             for arg in args {
-                if raw {
+                if debug {
+                    Value::String { 
+                        val: format!("{:#?}", arg),
+                        internal_span: Span::unknown()
+                    }.into_pipeline_data()
+                        .print_raw(engine_state, no_newline, to_stderr)?;
+                } else if raw {
                     arg.into_pipeline_data()
                         .print_raw(engine_state, no_newline, to_stderr)?;
                 } else {
@@ -74,15 +86,23 @@ Since this command has no output, there is no point in piping it with other comm
                 }
             }
         } else if !input.is_nothing() {
-            if let PipelineData::ByteStream(stream, _) = &mut input {
-                if let ByteStreamSource::Child(child) = stream.source_mut() {
-                    child.ignore_error(true);
-                }
-            }
-            if raw {
-                input.print_raw(engine_state, no_newline, to_stderr)?;
+            if debug {
+                Value::String { 
+                    val: format!("{:#?}", input),
+                    internal_span: Span::unknown()
+                }.into_pipeline_data()
+                    .print_raw(engine_state, no_newline, to_stderr)?;
             } else {
-                input.print_table(engine_state, stack, no_newline, to_stderr)?;
+                if let PipelineData::ByteStream(stream, _) = &mut input {
+                    if let ByteStreamSource::Child(child) = stream.source_mut() {
+                        child.ignore_error(true);
+                    }
+                }
+                if raw {
+                    input.print_raw(engine_state, no_newline, to_stderr)?;
+                } else {
+                    input.print_table(engine_state, stack, no_newline, to_stderr)?;
+                }
             }
         }
 
