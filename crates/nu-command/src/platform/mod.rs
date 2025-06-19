@@ -12,7 +12,7 @@ mod whoami;
 
 pub use ansi::{Ansi, AnsiLink, AnsiStrip};
 pub use clear::Clear;
-pub use dir_info::{DirBuilder, DirInfo, FileInfo};
+pub use dir_info::{FileStat, FileIdent};
 pub use input::Input;
 pub use input::InputList;
 pub use input::InputListen;

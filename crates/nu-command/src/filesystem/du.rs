@@ -1,10 +1,11 @@
-use crate::{DirBuilder, DirInfo, FileInfo};
+use crate::{FileStat, FileIdent};
 #[allow(deprecated)]
 use nu_engine::{command_prelude::*, current_dir};
 use nu_glob::Pattern;
 use nu_protocol::{NuGlob, Signals};
 use serde::Deserialize;
 use std::path::Path;
+use std::collections::HashSet;
 
 #[derive(Clone)]
 pub struct Du;
@@ -196,30 +197,42 @@ fn du_for_one_pattern(
     let max_depth = args.max_depth.map(|f| f.item as u64);
     let min_size = args.min_size.map(|f| f.item as u64);
 
-    let params = DirBuilder {
-        tag: span,
-        min: min_size,
-        deref,
-        exclude,
-        long,
-    };
+    // let params = DirBuilder {
+    //     tag: span,
+    //     min: min_size,
+    //     deref,
+    //     exclude,
+    //     long,
+    // };
 
-    Ok(paths.filter_map(move |p| match p {
-        Ok(a) => {
-            if a.is_dir() {
-                match DirInfo::new(a, &params, max_depth, span, &signals) {
-                    Ok(v) => Some(Value::from(v)),
-                    Err(_) => None,
-                }
-            } else {
-                match FileInfo::new(a, deref, span, params.long) {
-                    Ok(v) => Some(Value::from(v)),
-                    Err(_) => None,
-                }
-            }
+    Ok(paths.filter_map(move |path| match path {
+        Ok(path) => {
+            // if a.is_dir() {
+            //     match DirInfo::new(a, &params, max_depth, span, &signals) {
+            //         Ok(v) => Some(Value::from(v)),
+            //         Err(_) => None,
+            //     }
+            // } else {
+            //     match FileInfo::new(a, deref, span, params.long) {
+            //         Ok(v) => Some(Value::from(v)),
+            //         Err(_) => None,
+            //     }
+            // }
+            todo!()
         }
         Err(e) => Some(Value::error(e, span)),
     }))
+}
+
+fn du_for_one_file(
+    stat: FileStat,
+    seen_ident: &mut HashSet<FileIdent>,
+    deref: bool,
+    tag: Span,
+    max_depth: Option<i64>
+) -> Result<impl Iterator<Item = Value> + Send + use<>, ShellError>
+{
+    Err(todo!())
 }
 
 #[cfg(test)]
