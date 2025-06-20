@@ -1,5 +1,6 @@
 use fancy_regex::{Regex, escape};
 use nu_engine::command_prelude::*;
+use super::helpers::split_str;
 
 #[derive(Clone)]
 pub struct SplitRow;
@@ -183,40 +184,7 @@ fn split_row_helper(v: &Value, regex: &Regex, max_split: Option<usize>, name: Sp
             let v_span = v.span();
 
             if let Ok(s) = v.coerce_str() {
-                match max_split {
-                    Some(max_split) => regex
-                        .splitn(&s, max_split)
-                        .map(|x| match x {
-                            Ok(val) => Value::string(val, v_span),
-                            Err(err) => Value::error(
-                                ShellError::GenericError {
-                                    error: "Error with regular expression".into(),
-                                    msg: err.to_string(),
-                                    span: Some(v_span),
-                                    help: None,
-                                    inner: vec![],
-                                },
-                                v_span,
-                            ),
-                        })
-                        .collect(),
-                    None => regex
-                        .split(&s)
-                        .map(|x| match x {
-                            Ok(val) => Value::string(val, v_span),
-                            Err(err) => Value::error(
-                                ShellError::GenericError {
-                                    error: "Error with regular expression".into(),
-                                    msg: err.to_string(),
-                                    span: Some(v_span),
-                                    help: None,
-                                    inner: vec![],
-                                },
-                                v_span,
-                            ),
-                        })
-                        .collect(),
-                }
+                split_str(&s, regex, max_split, false, v_span)
             } else {
                 vec![Value::error(
                     ShellError::OnlySupportsThisInputType {

@@ -1,5 +1,6 @@
 use fancy_regex::{Regex, escape};
 use nu_engine::command_prelude::*;
+use super::helpers::split_str;
 
 #[derive(Clone)]
 pub struct SplitColumn;
@@ -209,25 +210,14 @@ fn split_column(
 
 fn split_column_helper(
     v: &Value,
-    separator: &Regex,
+    regex: &Regex,
     rest: &[Spanned<String>],
     collapse_empty: bool,
     max_split: Option<usize>,
     head: Span,
 ) -> Vec<Value> {
     if let Ok(s) = v.coerce_str() {
-        let split_result: Vec<_> = match max_split {
-            Some(max_split) => separator
-                .splitn(&s, max_split)
-                .filter_map(|x| x.ok())
-                .filter(|x| !(collapse_empty && x.is_empty()))
-                .collect(),
-            None => separator
-                .split(&s)
-                .filter_map(|x| x.ok())
-                .filter(|x| !(collapse_empty && x.is_empty()))
-                .collect(),
-        };
+        let split_result: Vec<Value> = split_str(&s, regex, max_split, collapse_empty, head);
         let positional: Vec<_> = rest.iter().map(|f| f.item.clone()).collect();
 
         // If they didn't provide column names, make up our own
@@ -238,12 +228,12 @@ fn split_column_helper(
                 gen_columns.push(format!("column{}", i + 1));
             }
 
-            for (&k, v) in split_result.iter().zip(&gen_columns) {
-                record.push(v, Value::string(k, head));
+            for (v, k) in split_result.into_iter().zip(&gen_columns) {
+                record.push(k, v);
             }
         } else {
-            for (&k, v) in split_result.iter().zip(&positional) {
-                record.push(v, Value::string(k, head));
+            for (v, k) in split_result.into_iter().zip(&positional) {
+                record.push(k, v);
             }
         }
         vec![Value::record(record, head)]
