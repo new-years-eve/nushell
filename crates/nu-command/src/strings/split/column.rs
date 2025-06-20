@@ -195,14 +195,17 @@ fn split_column(
 
     input.flat_map(
         move |x| {
-            split_column_helper(
+            match split_column_helper(
                 &x,
                 &regex,
                 &args.rest,
                 args.collapse_empty,
                 args.max_split,
                 name_span,
-            )
+            ) {
+                Ok(v) => v,
+                Err(err) => vec![Value::error(err, x.span())]
+            }
         },
         engine_state.signals(),
     )
@@ -215,47 +218,46 @@ fn split_column_helper(
     collapse_empty: bool,
     max_split: Option<usize>,
     head: Span,
-) -> Vec<Value> {
-    if let Ok(s) = v.coerce_str() {
-        let split_result: Vec<Value> = split_str(&s, regex, max_split, collapse_empty, head);
-        let positional: Vec<_> = rest.iter().map(|f| f.item.clone()).collect();
+) -> Result<Vec<Value>, ShellError> {
 
-        // If they didn't provide column names, make up our own
-        let mut record = Record::new();
-        if positional.is_empty() {
-            let mut gen_columns = vec![];
-            for i in 0..split_result.len() {
-                gen_columns.push(format!("column{}", i + 1));
-            }
-
-            for (v, k) in split_result.into_iter().zip(&gen_columns) {
-                record.push(k, v);
-            }
-        } else {
-            for (v, k) in split_result.into_iter().zip(&positional) {
-                record.push(k, v);
-            }
-        }
-        vec![Value::record(record, head)]
-    } else {
+    let s = v.coerce_str().map_err(|_|{
         match v {
             Value::Error { error, .. } => {
-                vec![Value::error(*error.clone(), head)]
+                *error.clone()
             }
             v => {
                 let span = v.span();
-                vec![Value::error(
-                    ShellError::OnlySupportsThisInputType {
-                        exp_input_type: "string".into(),
-                        wrong_type: v.get_type().to_string(),
-                        dst_span: head,
-                        src_span: span,
-                    },
-                    span,
-                )]
+                ShellError::OnlySupportsThisInputType {
+                    exp_input_type: "string".into(),
+                    wrong_type: v.get_type().to_string(),
+                    dst_span: head,
+                    src_span: span,
+                }
             }
         }
+    })?;
+
+    let split_result = split_str(&s, regex, max_split, collapse_empty, head)?;
+
+    let positional: Vec<_> = rest.iter().map(|f| f.item.clone()).collect();
+
+    // If they didn't provide column names, make up our own
+    let mut record = Record::new();
+    if positional.is_empty() {
+        let mut gen_columns = vec![];
+        for i in 0..split_result.len() {
+            gen_columns.push(format!("column{}", i + 1));
+        }
+
+        for (v, k) in split_result.into_iter().zip(&gen_columns) {
+            record.push(k, v);
+        }
+    } else {
+        for (v, k) in split_result.into_iter().zip(&positional) {
+            record.push(k, v);
+        }
     }
+    Ok(vec![Value::record(record, head)])
 }
 
 #[cfg(test)]

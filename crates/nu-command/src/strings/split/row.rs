@@ -169,16 +169,20 @@ fn split_row(
         inner: vec![],
     })?;
     input.flat_map(
-        move |x| split_row_helper(&x, &regex, args.max_split, name_span),
+        move |x| {
+            match split_row_helper(&x, &regex, args.max_split, name_span) {
+                Ok(v) => v,
+                Err(err) => vec![Value::error(err, x.span())]
+            }
+        },
         engine_state.signals(),
     )
 }
 
-fn split_row_helper(v: &Value, regex: &Regex, max_split: Option<usize>, name: Span) -> Vec<Value> {
-    let span = v.span();
+fn split_row_helper(v: &Value, regex: &Regex, max_split: Option<usize>, name: Span) -> Result<Vec<Value>, ShellError> {
     match v {
         Value::Error { error, .. } => {
-            vec![Value::error(*error.clone(), span)]
+            Err(*error.clone())
         }
         v => {
             let v_span = v.span();
@@ -186,15 +190,12 @@ fn split_row_helper(v: &Value, regex: &Regex, max_split: Option<usize>, name: Sp
             if let Ok(s) = v.coerce_str() {
                 split_str(&s, regex, max_split, false, v_span)
             } else {
-                vec![Value::error(
-                    ShellError::OnlySupportsThisInputType {
-                        exp_input_type: "string".into(),
-                        wrong_type: v.get_type().to_string(),
-                        dst_span: name,
-                        src_span: v_span,
-                    },
-                    name,
-                )]
+                Err(ShellError::OnlySupportsThisInputType {
+                    exp_input_type: "string".into(),
+                    wrong_type: v.get_type().to_string(),
+                    dst_span: name,
+                    src_span: v_span,
+                })
             }
         }
     }
