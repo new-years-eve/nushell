@@ -1,6 +1,6 @@
 use fancy_regex::{Regex, escape};
 use nu_engine::command_prelude::*;
-use super::helpers::split_str;
+use super::helpers::{SplitWhere, split_str};
 
 #[derive(Clone)]
 pub struct SplitRow;
@@ -28,15 +28,16 @@ impl Command for SplitRow {
             .named(
                 "number",
                 SyntaxShape::Int,
-                "Split into maximum number of items",
+                "SplitWhere into maximum number of items",
                 Some('n'),
             )
             .switch("regex", "use regex syntax for separator", Some('r'))
+            .named("split", SyntaxShape::String, "Whether to split lists before, after, or on (default) the separator", None)
             .category(Category::Strings)
     }
 
     fn description(&self) -> &str {
-        "Split a string into multiple rows using a separator."
+        "SplitWhere a string into multiple rows using a separator."
     }
 
     fn search_terms(&self) -> Vec<&str> {
@@ -46,7 +47,7 @@ impl Command for SplitRow {
     fn examples(&self) -> Vec<Example> {
         vec![
             Example {
-                description: "Split a string into rows of char",
+                description: "SplitWhere a string into rows of char",
                 example: "'abc' | split row ''",
                 result: Some(Value::list(
                     vec![
@@ -60,7 +61,7 @@ impl Command for SplitRow {
                 )),
             },
             Example {
-                description: "Split a string into rows by the specified separator",
+                description: "SplitWhere a string into rows by the specified separator",
                 example: "'a--b--c' | split row '--'",
                 result: Some(Value::list(
                     vec![
@@ -72,7 +73,7 @@ impl Command for SplitRow {
                 )),
             },
             Example {
-                description: "Split a string by '-'",
+                description: "SplitWhere a string by '-'",
                 example: "'-a-b-c-' | split row '-'",
                 result: Some(Value::list(
                     vec![
@@ -86,7 +87,7 @@ impl Command for SplitRow {
                 )),
             },
             Example {
-                description: "Split a string by regex",
+                description: "SplitWhere a string by regex",
                 example: r"'a   b       c' | split row -r '\s+'",
                 result: Some(Value::list(
                     vec![
@@ -114,11 +115,15 @@ impl Command for SplitRow {
         let separator: Spanned<String> = call.req(engine_state, stack, 0)?;
         let max_split: Option<usize> = call.get_flag(engine_state, stack, "number")?;
         let has_regex = call.has_flag(engine_state, stack, "regex")?;
+        let split: Option<SplitWhere> = call.get_flag(engine_state, stack, "split")?;
+        let split = split.unwrap_or(SplitWhere::On);
+
 
         let args = Arguments {
             separator,
             max_split,
             has_regex,
+            split,
         };
         split_row(engine_state, call, input, args)
     }
@@ -132,11 +137,14 @@ impl Command for SplitRow {
         let separator: Spanned<String> = call.req_const(working_set, 0)?;
         let max_split: Option<usize> = call.get_flag_const(working_set, "number")?;
         let has_regex = call.has_flag_const(working_set, "regex")?;
+        let split: Option<SplitWhere> = call.get_flag_const(working_set, "split")?;
+        let split = split.unwrap_or(SplitWhere::On);
 
         let args = Arguments {
             separator,
             max_split,
             has_regex,
+            split,
         };
         split_row(working_set.permanent(), call, input, args)
     }
@@ -146,6 +154,7 @@ struct Arguments {
     has_regex: bool,
     separator: Spanned<String>,
     max_split: Option<usize>,
+    split: SplitWhere,
 }
 
 fn split_row(
@@ -170,7 +179,7 @@ fn split_row(
     })?;
     input.flat_map(
         move |x| {
-            match split_row_helper(&x, &regex, args.max_split, name_span) {
+            match split_row_helper(&x, &regex, args.max_split, args.split, name_span) {
                 Ok(v) => v,
                 Err(err) => vec![Value::error(err, x.span())]
             }
@@ -179,7 +188,7 @@ fn split_row(
     )
 }
 
-fn split_row_helper(v: &Value, regex: &Regex, max_split: Option<usize>, name: Span) -> Result<Vec<Value>, ShellError> {
+fn split_row_helper(v: &Value, regex: &Regex, max_split: Option<usize>, split: SplitWhere, name: Span) -> Result<Vec<Value>, ShellError> {
     match v {
         Value::Error { error, .. } => {
             Err(*error.clone())
@@ -188,7 +197,7 @@ fn split_row_helper(v: &Value, regex: &Regex, max_split: Option<usize>, name: Sp
             let v_span = v.span();
 
             if let Ok(s) = v.coerce_str() {
-                split_str(&s, regex, max_split, false, v_span)
+                split_str(&s, regex, max_split, false, split, v_span)
             } else {
                 Err(ShellError::OnlySupportsThisInputType {
                     exp_input_type: "string".into(),

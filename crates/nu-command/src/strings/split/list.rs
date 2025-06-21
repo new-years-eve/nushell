@@ -1,6 +1,7 @@
 use fancy_regex::Regex;
 use nu_engine::{ClosureEval, command_prelude::*};
-use nu_protocol::{FromValue, Signals};
+use nu_protocol::Signals;
+use super::helpers::SplitWhere;
 
 #[derive(Clone)]
 pub struct SubCommand;
@@ -30,7 +31,7 @@ impl Command for SubCommand {
     }
 
     fn description(&self) -> &str {
-        "Split a list into multiple lists using a separator."
+        "SplitWhere a list into multiple lists using a separator."
     }
 
     fn search_terms(&self) -> Vec<&str> {
@@ -40,7 +41,7 @@ impl Command for SubCommand {
     fn examples(&self) -> Vec<Example> {
         vec![
             Example {
-                description: "Split a list of chars into two lists",
+                description: "SplitWhere a list of chars into two lists",
                 example: "[a, b, c, d, e, f, g] | split list d",
                 result: Some(Value::list(
                     vec![
@@ -65,7 +66,7 @@ impl Command for SubCommand {
                 )),
             },
             Example {
-                description: "Split a list of lists into two lists of lists",
+                description: "SplitWhere a list of lists into two lists of lists",
                 example: "[[1,2], [2,3], [3,4]] | split list [2,3]",
                 result: Some(Value::list(
                     vec![
@@ -88,7 +89,7 @@ impl Command for SubCommand {
                 )),
             },
             Example {
-                description: "Split a list of chars into two lists",
+                description: "SplitWhere a list of chars into two lists",
                 example: "[a, b, c, d, a, e, f, g] | split list a",
                 result: Some(Value::list(
                     vec![
@@ -114,7 +115,7 @@ impl Command for SubCommand {
                 )),
             },
             Example {
-                description: "Split a list of chars into lists based on multiple characters",
+                description: "SplitWhere a list of chars into lists based on multiple characters",
                 example: r"[a, b, c, d, a, e, f, g] | split list --regex '(b|e)'",
                 result: Some(Value::list(
                     vec![
@@ -136,7 +137,7 @@ impl Command for SubCommand {
                 )),
             },
             Example {
-                description: "Split a list of numbers on multiples of 3",
+                description: "SplitWhere a list of numbers on multiples of 3",
                 example: r"[1 2 3 4 5 6 7 8 9 10] | split list {|e| $e mod 3 == 0 }",
                 result: Some(Value::test_list(vec![
                     Value::test_list(vec![Value::test_int(1), Value::test_int(2)]),
@@ -146,7 +147,7 @@ impl Command for SubCommand {
                 ])),
             },
             Example {
-                description: "Split a list of numbers into lists ending with 0",
+                description: "SplitWhere a list of numbers into lists ending with 0",
                 example: r"[1 2 0 3 4 5 0 6 0 0 7] | split list --split after 0",
                 result: Some(Value::test_list(vec![
                     Value::test_list(vec![
@@ -181,8 +182,8 @@ impl Command for SubCommand {
     ) -> Result<PipelineData, ShellError> {
         let has_regex = call.has_flag(engine_state, stack, "regex")?;
         let separator: Value = call.req(engine_state, stack, 0)?;
-        let split: Option<Split> = call.get_flag(engine_state, stack, "split")?;
-        let split = split.unwrap_or(Split::On);
+        let split: Option<SplitWhere> = call.get_flag(engine_state, stack, "split")?;
+        let split = split.unwrap_or(SplitWhere::On);
         let matcher = match separator {
             Value::Closure { val, .. } => {
                 Matcher::from_closure(ClosureEval::new(engine_state, stack, *val))
@@ -200,8 +201,8 @@ impl Command for SubCommand {
     ) -> Result<PipelineData, ShellError> {
         let has_regex = call.has_flag_const(working_set, "regex")?;
         let separator: Value = call.req_const(working_set, 0)?;
-        let split: Option<Split> = call.get_flag_const(working_set, "split")?;
-        let split = split.unwrap_or(Split::On);
+        let split: Option<SplitWhere> = call.get_flag_const(working_set, "split")?;
+        let split = split.unwrap_or(SplitWhere::On);
         let matcher = Matcher::new(has_regex, separator)?;
         split_list(working_set.permanent(), call, input, matcher, split)
     }
@@ -211,29 +212,6 @@ enum Matcher {
     Regex(Regex),
     Direct(Value),
     Closure(ClosureEval),
-}
-
-enum Split {
-    On,
-    Before,
-    After,
-}
-
-impl FromValue for Split {
-    fn from_value(v: Value) -> Result<Self, ShellError> {
-        let span = v.span();
-        let s = <String>::from_value(v)?;
-        match s.as_str() {
-            "on" => Ok(Split::On),
-            "before" => Ok(Split::Before),
-            "after" => Ok(Split::After),
-            _ => Err(ShellError::InvalidValue {
-                valid: "one of: on, before, after".into(),
-                actual: s,
-                span,
-            }),
-        }
-    }
 }
 
 impl Matcher {
@@ -284,7 +262,7 @@ fn split_list(
     call: &Call,
     input: PipelineData,
     mut matcher: Matcher,
-    split: Split,
+    split: SplitWhere,
 ) -> Result<PipelineData, ShellError> {
     let head = call.head;
     Ok(SplitList::new(
@@ -302,7 +280,7 @@ struct SplitList<I, T, F> {
     closure: F,
     done: bool,
     signals: Signals,
-    split: Split,
+    split: SplitWhere,
     last_item: Option<T>,
 }
 
@@ -311,7 +289,7 @@ where
     I: Iterator<Item = T>,
     F: FnMut(&I::Item) -> bool,
 {
-    fn new(iterator: I, signals: Signals, split: Split, closure: F) -> Self {
+    fn new(iterator: I, signals: Signals, split: SplitWhere, closure: F) -> Self {
         Self {
             iterator,
             closure,
@@ -357,11 +335,11 @@ where
                 Some(value) => {
                     if (self.closure)(&value) {
                         match self.split {
-                            Split::On => {}
-                            Split::Before => {
+                            SplitWhere::On => {}
+                            SplitWhere::Before => {
                                 self.last_item = Some(value);
                             }
-                            Split::After => {
+                            SplitWhere::After => {
                                 items.push(value);
                             }
                         }
