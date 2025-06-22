@@ -1,4 +1,4 @@
-use fancy_regex::{Captures, Regex, RegexBuilder};
+use fancy_regex::{Regex, RegexBuilder};
 use nu_engine::command_prelude::*;
 use nu_protocol::{ListStream, Signals, engine::StateWorkingSet};
 use std::collections::VecDeque;
@@ -38,6 +38,18 @@ impl Command for Parse {
                 Some('b'),
             )
             .allow_variants_without_examples(true)
+            .named(
+                "before",
+                SyntaxShape::String,
+                "add a column with the given name for the text between the previous regex match and this one",
+                None,
+            )
+            .named(
+                "after",
+                SyntaxShape::String,
+                "add a column with the given name for the text between this regex match and the next one",
+                None,
+            )
             .category(Category::Strings)
     }
 
@@ -129,7 +141,18 @@ impl Command for Parse {
         let backtrack_limit: usize = call
             .get_flag(engine_state, stack, "backtrack")?
             .unwrap_or(1_000_000); // 1_000_000 is fancy_regex default
-        operate(engine_state, pattern, regex, backtrack_limit, call, input)
+        let before = call.get_flag(engine_state, stack, "before")?;
+        let after = call.get_flag(engine_state, stack, "after")?;
+        operate(
+            engine_state,
+            pattern,
+            regex,
+            backtrack_limit,
+            before,
+            after,
+            call,
+            input,
+        )
     }
 
     fn run_const(
@@ -143,11 +166,15 @@ impl Command for Parse {
         let backtrack_limit: usize = call
             .get_flag_const(working_set, "backtrack")?
             .unwrap_or(1_000_000);
+        let before = call.get_flag_const(working_set, "before")?;
+        let after = call.get_flag_const(working_set, "after")?;
         operate(
             working_set.permanent(),
             pattern,
             regex,
             backtrack_limit,
+            before,
+            after,
             call,
             input,
         )
@@ -159,6 +186,8 @@ fn operate(
     pattern: Spanned<String>,
     regex: bool,
     backtrack_limit: usize,
+    before: Option<String>,
+    after: Option<String>,
     call: &Call,
     input: PipelineData,
 ) -> Result<PipelineData, ShellError> {
@@ -198,8 +227,7 @@ fn operate(
         PipelineData::Empty => Ok(PipelineData::Empty),
         PipelineData::Value(value, ..) => match value {
             Value::String { val, .. } => {
-
-                let captures = apply_regex(&regex, &val, &columns, head)?;
+                let captures = apply_regex(&regex, &val, &columns, &before, &after, head)?;
                 Ok(Value::list(captures, head).into_pipeline_data())
             }
             Value::List { vals, .. } => {
@@ -219,6 +247,8 @@ fn operate(
                     captures: VecDeque::new(),
                     regex,
                     columns,
+                    before,
+                    after,
                     iter,
                     span: head,
                     signals: engine_state.signals().clone(),
@@ -248,6 +278,8 @@ fn operate(
                     captures: VecDeque::new(),
                     regex,
                     columns,
+                    before,
+                    after,
                     iter,
                     span: head,
                     signals: engine_state.signals().clone(),
@@ -260,6 +292,8 @@ fn operate(
                     captures: VecDeque::new(),
                     regex,
                     columns,
+                    before,
+                    after,
                     iter: lines,
                     span: head,
                     signals: engine_state.signals().clone(),
@@ -338,6 +372,8 @@ struct ParseIter<I: Iterator<Item = Result<String, ShellError>>> {
     captures: VecDeque<Value>,
     regex: Regex,
     columns: Vec<String>,
+    before: Option<String>,
+    after: Option<String>,
     iter: I,
     span: Span,
     signals: Signals,
@@ -345,7 +381,14 @@ struct ParseIter<I: Iterator<Item = Result<String, ShellError>>> {
 
 impl<I: Iterator<Item = Result<String, ShellError>>> ParseIter<I> {
     fn populate_captures(&mut self, str: &str) -> Result<(), ShellError> {
-        self.captures.extend( apply_regex(&self.regex, str, &self.columns, self.span)? );
+        self.captures.extend(apply_regex(
+            &self.regex,
+            str,
+            &self.columns,
+            &self.before,
+            &self.after,
+            self.span,
+        )?);
         Ok(())
     }
 }
@@ -379,10 +422,13 @@ fn apply_regex(
     regex: &Regex,
     s: &str,
     columns: &[String],
-    span: Span
-) -> Result<Vec<Value>, ShellError>
-{
+    before: &Option<String>,
+    after: &Option<String>,
+    span: Span,
+) -> Result<Vec<Value>, ShellError> {
     let mut res = vec![];
+    let mut idx = 0;
+    let mut last_record: Option<Record> = None;
 
     for captures in regex.captures_iter(s) {
         let captures = captures.map_err(|err| ShellError::GenericError {
@@ -393,16 +439,42 @@ fn apply_regex(
             inner: vec![],
         })?;
 
-        let record: Record = columns
+        let Some(m) = captures.get(0) else {
+            return Err(ShellError::NushellFailed {
+                msg: "capture.get(0) should always return the full regex match".to_string(),
+            });
+        };
+
+        let mut record: Record = columns
             .iter()
             .zip(captures.iter().skip(1))
             .map(|(column, match_)| {
                 let match_str = match_.map(|m| m.as_str()).unwrap_or("");
                 (column.clone(), Value::string(match_str, span))
             })
-        .collect();
+            .collect();
 
-        res.push(Value::record(record, span));
+        if let Some(column_name) = before {
+            record.push(column_name, Value::string(&s[idx..m.start()], span));
+        }
+
+        if let Some(mut last_record) = last_record {
+            if let Some(column_name) = after {
+                last_record.push(column_name, Value::string(&s[idx..m.start()], span));
+            }
+
+            res.push(Value::record(last_record, span));
+        }
+        last_record = Some(record);
+        idx = m.end();
+    }
+
+    if let Some(mut last_record) = last_record {
+        if let Some(column_name) = after {
+            last_record.push(column_name, Value::string(&s[idx..s.len()], span));
+        }
+
+        res.push(Value::record(last_record, span));
     }
 
     Ok(res)
