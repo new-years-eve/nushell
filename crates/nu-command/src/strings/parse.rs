@@ -198,11 +198,8 @@ fn operate(
         PipelineData::Empty => Ok(PipelineData::Empty),
         PipelineData::Value(value, ..) => match value {
             Value::String { val, .. } => {
-                let captures = regex
-                    .captures_iter(&val)
-                    .map(|captures| captures_to_value(captures, &columns, head))
-                    .collect::<Result<_, _>>()?;
 
+                let captures = apply_regex(&regex, &val, &columns, head)?;
                 Ok(Value::list(captures, head).into_pipeline_data())
             }
             Value::List { vals, .. } => {
@@ -348,10 +345,7 @@ struct ParseIter<I: Iterator<Item = Result<String, ShellError>>> {
 
 impl<I: Iterator<Item = Result<String, ShellError>>> ParseIter<I> {
     fn populate_captures(&mut self, str: &str) -> Result<(), ShellError> {
-        for captures in self.regex.captures_iter(str) {
-            self.captures
-                .push_back(captures_to_value(captures, &self.columns, self.span)?);
-        }
+        self.captures.extend( apply_regex(&self.regex, str, &self.columns, self.span)? );
         Ok(())
     }
 }
@@ -381,29 +375,37 @@ impl<I: Iterator<Item = Result<String, ShellError>>> Iterator for ParseIter<I> {
     }
 }
 
-fn captures_to_value(
-    captures: Result<Captures, fancy_regex::Error>,
+fn apply_regex(
+    regex: &Regex,
+    s: &str,
     columns: &[String],
-    span: Span,
-) -> Result<Value, ShellError> {
-    let captures = captures.map_err(|err| ShellError::GenericError {
-        error: "Error with regular expression captures".into(),
-        msg: err.to_string(),
-        span: Some(span),
-        help: None,
-        inner: vec![],
-    })?;
+    span: Span
+) -> Result<Vec<Value>, ShellError>
+{
+    let mut res = vec![];
 
-    let record = columns
-        .iter()
-        .zip(captures.iter().skip(1))
-        .map(|(column, match_)| {
-            let match_str = match_.map(|m| m.as_str()).unwrap_or("");
-            (column.clone(), Value::string(match_str, span))
-        })
+    for captures in regex.captures_iter(s) {
+        let captures = captures.map_err(|err| ShellError::GenericError {
+            error: "Error with regular expression captures".into(),
+            msg: err.to_string(),
+            span: Some(span),
+            help: None,
+            inner: vec![],
+        })?;
+
+        let record: Record = columns
+            .iter()
+            .zip(captures.iter().skip(1))
+            .map(|(column, match_)| {
+                let match_str = match_.map(|m| m.as_str()).unwrap_or("");
+                (column.clone(), Value::string(match_str, span))
+            })
         .collect();
 
-    Ok(Value::record(record, span))
+        res.push(Value::record(record, span));
+    }
+
+    Ok(res)
 }
 
 #[cfg(test)]
