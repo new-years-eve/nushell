@@ -233,4 +233,19 @@ mod regex {
             assert_eq!(actual.out, "1000");
         })
     }
+
+    #[test]
+    fn parse_handles_external_stream_chunking_with_newline_matches() {
+        Playground::setup("parse_test_streaming_1", |dirs, sandbox| {
+            let data: String = "{\n 'example' : 'json' \n}".repeat(1000);
+            sandbox.with_files(&[Stub::FileWithContent("data.txt", &data)]);
+
+            let actual = nu!(
+                cwd: dirs.test(),
+                r#"open data.txt | parse --regex "({(?:\n|.)+?})" | length"#
+            );
+
+            assert_eq!(actual.out, "1000");
+        })
+    }
 }

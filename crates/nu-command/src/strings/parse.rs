@@ -453,26 +453,60 @@ impl<I: Iterator<Item = Result<String, ShellError>>> ParseIter<I> {
         }
     }
 
+    fn collect_until_match(&mut self) -> Result<(), ShellError> {
+        /* the regex crate that we use is not able to parse an incoming stream,
+        so we need to accumulate the incoming stream and check it for matches repeatedly*/
+
+        let mut items_to_collect = 1;
+
+        loop {
+            if self.signals.interrupted() {
+                return Ok(());
+            }
+
+            for _ in 0..items_to_collect {
+                if let Some(res) = self.iter.next() {
+                    if self.buffer.is_empty() {
+                        self.buffer = res?;
+                    } else {
+                        self.buffer.push_str(&res?);
+                    }
+                } else {
+                    return Ok(());
+                }
+            }
+
+            if self
+                .regex
+                .is_match(&self.buffer)
+                .map_err(|err| self.convert_regex_error(err))?
+            {
+                return Ok(());
+            }
+
+            /* We collect twice as many items in each successive iteration so that the worse case complexity is O(n) and not O(n²) */
+            items_to_collect *= 2;
+        }
+    }
+
     fn try_next(&mut self) -> Result<Option<Value>, ShellError> {
         loop {
             if let Some(val) = self.captures.pop_front() {
                 return Ok(Some(val));
             }
 
+            self.collect_until_match()?;
+
             if self.signals.interrupted() {
                 return Ok(None);
             }
 
-            let next_s = match self.iter.next() {
-                Some(res) => res?,
-                None => break,
-            };
-
             let mut idx = 0;
-            let prev_len = self.buffer.len();
-            self.buffer.push_str(&next_s);
+            let mut more_captures = false;
 
-            for captures in self.regex.captures_iter(&next_s) {
+            for captures in self.regex.captures_iter(&self.buffer) {
+                more_captures = true;
+
                 let captures = captures.map_err(|err| self.convert_regex_error(err))?;
 
                 let Some(m) = captures.get(0) else {
@@ -486,7 +520,7 @@ impl<I: Iterator<Item = Result<String, ShellError>>> ParseIter<I> {
                 if let Some(column_name) = &self.before {
                     record.push(
                         column_name,
-                        Value::string(&self.buffer[idx..(m.start() + prev_len)], self.span),
+                        Value::string(&self.buffer[idx..m.start()], self.span),
                     );
                 }
 
@@ -502,7 +536,7 @@ impl<I: Iterator<Item = Result<String, ShellError>>> ParseIter<I> {
                     if let Some(column_name) = &self.after {
                         last_record.push(
                             column_name,
-                            Value::string(&self.buffer[idx..(m.start() + prev_len)], self.span),
+                            Value::string(&self.buffer[idx..m.start()], self.span),
                         );
                     }
 
@@ -510,9 +544,13 @@ impl<I: Iterator<Item = Result<String, ShellError>>> ParseIter<I> {
                         .push_back(Value::record(last_record, self.span));
                 }
                 self.last_capture = Some(record);
-                idx = m.end() + prev_len;
+                idx = m.end();
             }
             self.buffer = self.buffer.split_off(idx);
+
+            if !more_captures {
+                break;
+            }
         }
         Ok(self.last_capture.take().map(|mut last_record| {
             if let Some(column_name) = &self.after {
